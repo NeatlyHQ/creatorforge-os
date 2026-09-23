@@ -520,8 +520,14 @@
       }
 
       function formatWords(n) {
-        if (n >= 10000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
         return n.toLocaleString();
+      }
+
+      function formatMoney(v) {
+        const n = Number(v);
+        if (!isFinite(n)) return '0.00';
+        const rounded = Math.round(n * 100) / 100;
+        return rounded.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       }
 
       function esc(s) {
@@ -531,13 +537,20 @@
       }
 
       function sumFinance(type) {
-        return appData.financeEntries
+        const total = appData.financeEntries
           .filter(e => e.type === type)
-          .reduce((s, e) => s + (isFinite(e.amount) ? e.amount : 0), 0);
+          .reduce((s, e) => {
+            const amt = Number(e.amount);
+            return s + (isFinite(amt) ? amt : 0);
+          }, 0);
+        return Math.round(total * 100) / 100;
       }
 
       function computeStats() {
-        const totalWords = appData.projects.reduce((sum, p) => sum + (p.current || 0), 0);
+        const totalWords = appData.projects.reduce((sum, p) => {
+          const current = Number(p.current);
+          return sum + (isFinite(current) ? current : 0);
+        }, 0);
         const incomeTotal = sumFinance('income');
         const completedGoals = appData.goals.filter(g => g.complete).length;
         return { projectsCount: appData.projects.length, totalWords, income: incomeTotal, goalsDone: completedGoals,
@@ -549,7 +562,7 @@
         document.getElementById('liveStats').innerHTML = `
           <div class="stat-item"><span>Projects</span><span class="stat-value">${s.projectsCount}</span></div>
           <div class="stat-item"><span>Words</span><span class="stat-value">${formatWords(s.totalWords)}</span></div>
-          <div class="stat-item"><span>Income</span><span class="stat-value">$${s.income.toLocaleString()}</span></div>
+          <div class="stat-item"><span>Income</span><span class="stat-value">$${formatMoney(s.income)}</span></div>
           <div class="stat-item"><span>Goals</span><span class="stat-value">${s.goalsDone}/${s.totalGoals}</span></div>
         `;
       }
@@ -599,23 +612,25 @@
           <div class="card-grid">
             <div class="stat-card"><div class="label">Projects</div><div class="number">${s.projectsCount}</div></div>
             <div class="stat-card"><div class="label">Total Words</div><div class="number">${formatWords(s.totalWords)}</div></div>
-            <div class="stat-card"><div class="label">Income</div><div class="number">$${s.income.toLocaleString()}</div></div>
+            <div class="stat-card"><div class="label">Income</div><div class="number">$${formatMoney(s.income)}</div></div>
             <div class="stat-card"><div class="label">Goals</div><div class="number">${s.goalsDone}/${s.totalGoals}</div></div>
           </div>`;
       }
 
       function renderWriter() {
-        const rows = appData.projects.map(p => `<tr><td>${esc(p.title)}</td><td>${esc(p.type)}</td><td>${p.current.toLocaleString()}/${p.target.toLocaleString()}</td><td>${esc(p.status)}</td><td><button class="delete-project" data-id="${esc(p.id)}">Del</button></td></tr>`).join('');
+        const rows = appData.projects.map(p => `<tr><td>${esc(p.title)}</td><td>${esc(p.type)}</td><td>${Number(p.current).toLocaleString()}/${Number(p.target).toLocaleString()}</td><td>${esc(p.status)}</td><td><button class="delete-project" data-id="${esc(p.id)}">Del</button></td></tr>`).join('');
         document.getElementById('module-writer').innerHTML = `
           <h2>✍️ Universal Writer</h2><table>${rows}</table>
           <div style="margin-top:1rem;"><input id="newTitle" placeholder="Title"><input id="newType" placeholder="Type"><input id="newCurrent" type="number" placeholder="Words"><input id="newTarget" type="number" placeholder="Target"><button id="addProject">Add</button></div>`;
         document.getElementById('addProject').onclick = () => {
           const t = document.getElementById('newTitle').value,
             ty = document.getElementById('newType').value;
-          const c = parseInt(document.getElementById('newCurrent').value.replace(/[,\s]/g, ''), 10),
-            ta = parseInt(document.getElementById('newTarget').value.replace(/[,\s]/g, ''), 10);
+          const rawCurrent = document.getElementById('newCurrent').value.replace(/[,\s]/g, '');
+          const rawTarget = document.getElementById('newTarget').value.replace(/[,\s]/g, '');
+          const c = Number(rawCurrent);
+          const ta = Number(rawTarget);
           if (!t.trim()) return;
-          if (!isFinite(c) || c < 0 || !isFinite(ta) || ta <= 0 || c > Number.MAX_SAFE_INTEGER || ta > Number.MAX_SAFE_INTEGER) {
+          if (rawCurrent === '' || rawTarget === '' || !Number.isSafeInteger(c) || c < 0 || !Number.isSafeInteger(ta) || ta <= 0) {
             alert('Invalid word counts: "Words" must be ≥ 0 and "Target" must be > 0.');
             return;
           }
@@ -761,9 +776,9 @@
         const income = sumFinance('income');
         const expense = sumFinance('expense');
         let rows = appData.financeEntries.map(e =>
-          `<tr><td>${esc(e.desc)}</td><td>${esc(e.type)}</td><td>$${isFinite(e.amount) ? e.amount : 0}</td><td>${esc(e.date)}</td><td><button data-id="${esc(e.id)}" class="del-fin">X</button></td></tr>`).join('');
+          `<tr><td>${esc(e.desc)}</td><td>${esc(e.type)}</td><td>$${formatMoney(e.amount)}</td><td>${esc(e.date)}</td><td><button data-id="${esc(e.id)}" class="del-fin">X</button></td></tr>`).join('');
         document.getElementById('module-finance').innerHTML = `
-          <h2>💰 Creative Finance</h2><p>Income $${income} · Expenses $${expense} · Net <strong>$${income-expense}</strong></p>
+          <h2>💰 Creative Finance</h2><p>Income $${formatMoney(income)} · Expenses $${formatMoney(expense)} · Net <strong>$${formatMoney(income-expense)}</strong></p>
           <table>${rows}</table>
           <input id="fDesc" placeholder="Desc"><select id="fType"><option>income</option><option>expense</option></select><input id="fAmt" type="number" placeholder="Amount"><input id="fDate" type="date"><button id="addFin">+</button>`;
         document.getElementById('addFin').onclick = () => {
@@ -791,10 +806,11 @@
           `<h2>🎯 Goals & Momentum</h2>${gs}<input id="gText" placeholder="Goal"><input id="gProg" type="number" placeholder="%"><button id="addGoal">+</button>`;
         document.getElementById('addGoal').onclick = () => {
           const txt = document.getElementById('gText').value.trim();
-          let prog = parseInt(document.getElementById('gProg').value, 10);
+          const rawProg = document.getElementById('gProg').value.trim();
           if (!txt) return;
-          if (!isFinite(prog)) prog = 0;
-          prog = Math.min(100, Math.max(0, prog));
+          if (rawProg === '') { alert('Progress must be a whole number from 0 to 100.'); return; }
+          const prog = Number(rawProg);
+          if (!Number.isInteger(prog) || prog < 0 || prog > 100) { alert('Progress must be a whole number from 0 to 100.'); return; }
           appData.goals.push({ id: guid(), text: txt, progress: prog, complete: prog === 100 });
           saveData();
           renderGoals();
@@ -832,9 +848,9 @@
             <ul>
               <li>Projects: ${s.projectsCount}</li>
               <li>Total words: ${s.totalWords.toLocaleString()}</li>
-              <li>Income: $${income.toLocaleString()}</li>
-              <li>Expenses: $${expense.toLocaleString()}</li>
-              <li>Net: $${(income - expense).toLocaleString()}</li>
+              <li>Income: $${formatMoney(income)}</li>
+              <li>Expenses: $${formatMoney(expense)}</li>
+              <li>Net: $${formatMoney(income - expense)}</li>
               <li>Goals completed: ${s.goalsDone}/${s.totalGoals}</li>
             </ul>`;
           printEl.style.display = 'block';
@@ -860,6 +876,5 @@
       switchModule('command');
     })();
   </script>
-<script data-goatcounter="https://neatlyhq-goatcounter.neatlyshop-a96.workers.dev/count" async src="https://neatlyhq-goatcounter.neatlyshop-a96.workers.dev/count.js"></script>
 </body>
 </html>
