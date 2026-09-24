@@ -378,6 +378,37 @@
       border-radius: var(--border-radius-sm);
     }
 
+    /* task card internals (text + touch/keyboard accessible actions) */
+    .task-card { flex-wrap: wrap; justify-content: space-between; }
+    .task-text { flex: 1 1 100%; min-width: 0; }
+    .task-card.done .task-text { opacity: 0.55; text-decoration: line-through; }
+    .task-actions { display: flex; gap: 2px; flex-shrink: 0; margin-left: auto; }
+    .task-card button {
+      padding: 0 0.3rem;
+      border-radius: 6px;
+      font-size: 0.7rem;
+      line-height: 1.45;
+      border-color: rgba(212, 168, 83, 0.35);
+      margin: 0;
+    }
+    button[disabled] { opacity: 0.3; cursor: not-allowed; }
+    button[disabled]:hover { background: rgba(212, 168, 83, 0.05); color: var(--accent); }
+    .pipeline-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+      margin-bottom: 0.9rem;
+    }
+    .pipeline-toolbar input { min-width: 220px; }
+    .pipeline-hint,
+    .fin-warning {
+      font-size: 0.75rem;
+      color: var(--text3);
+      margin-top: 0.6rem;
+    }
+    .fin-warning { color: #c98b4b; }
+
     .footer-cta {
       margin-top: 2rem;
       padding: 1.2rem;
@@ -484,25 +515,162 @@
       }
       let appData = emptyData();
 
-      function validateData(d) {
-        if (!d || typeof d !== 'object') return false;
-        const arrays = ['projects', 'worldElements', 'characters', 'copyItems', 'financeEntries', 'goals'];
-        for (const k of arrays) { if (!Array.isArray(d[k])) return false; }
-        if (!d.pipeline || typeof d.pipeline !== 'object') return false;
-        for (const phase of ['pre-prod', 'production', 'revision', 'launch', 'post-launch']) {
-          if (!Array.isArray(d.pipeline[phase])) d.pipeline[phase] = [];
+      // ---------- NUMERIC / DATA HELPERS (audit fix: no implicit coercion) ----------
+      const PHASES = ['pre-prod', 'production', 'revision', 'launch', 'post-launch'];
+      const PHASE_LABELS = ['Pre-Production', 'Production', 'Revision', 'Launch', 'Post-Launch'];
+      const LOCALE = 'en-US';
+
+      function isObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+      /* Strict numeric coercion: numbers and numeric strings only.
+         booleans / arrays / objects / null / undefined / "" / "abc" -> fallback. */
+      function toNum(v, fallback) {
+        const fb = arguments.length > 1 ? fallback : 0;
+        if (typeof v === 'number') return isFinite(v) ? v : fb;
+        if (typeof v === 'string') {
+          const cleaned = v.replace(/[\s,\u00A0\u202F]/g, '');
+          if (cleaned === '') return fb;
+          const n = Number(cleaned);
+          return isFinite(n) ? n : fb;
         }
+        return fb;
+      }
+
+      function round2(n) {
+        const v = toNum(n);
+        return Math.sign(v) * Math.round((Math.abs(v) + Number.EPSILON) * 100) / 100;
+      }
+
+      function toInt(v, fallback) { return Math.round(toNum(v, fallback)); }
+
+      function normType(t) { return String(t == null ? '' : t).trim().toLowerCase(); }
+
+      function clampProgress(p) { return Math.min(100, Math.max(0, toInt(p, 0))); }
+
+      function formatMoney(n) {
+        const v = round2(n);
+        const abs = Math.abs(v).toLocaleString(LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        return (v < 0 ? '-$' : '$') + abs;
+      }
+
+      function formatInt(n) { return Math.max(0, toInt(n, 0)).toLocaleString(LOCALE); }
+
+      function ensurePipeline() {
+        if (!isObj(appData.pipeline)) appData.pipeline = {};
+        PHASES.forEach(p => { if (!Array.isArray(appData.pipeline[p])) appData.pipeline[p] = []; });
+        return appData.pipeline;
+      }
+
+      /* Repairs a payload instead of throwing it away.
+         Returns a clean data object, or null if the payload is not an object at all. */
+      function sanitizeData(d) {
+        if (!isObj(d)) return null;
+        const out = emptyData();
+        const arr = v => (Array.isArray(v) ? v : []);
+
+        out.projects = arr(d.projects).filter(isObj).map(p => ({
+          id: p.id ? String(p.id) : guid(),
+          title: String(p.title == null ? 'Untitled' : p.title),
+          type: String(p.type == null ? '' : p.type),
+          current: Math.max(0, toInt(p.current, 0)),
+          target: Math.max(0, toInt(p.target, 0)),
+          status: String(p.status == null ? 'Draft' : p.status)
+        }));
+
+        out.worldElements = arr(d.worldElements).filter(isObj).map(w => ({
+          id: w.id ? String(w.id) : guid(),
+          name: String(w.name == null ? 'Untitled' : w.name),
+          category: String(w.category == null || w.category === '' ? 'Uncategorized' : w.category)
+        }));
+
+        out.characters = arr(d.characters).filter(isObj).map(c => ({
+          id: c.id ? String(c.id) : guid(),
+          name: String(c.name == null ? 'Unnamed' : c.name),
+          role: String(c.role == null || c.role === '' ? '-' : c.role),
+          traits: String(c.traits == null || c.traits === '' ? '-' : c.traits)
+        }));
+
+        if (Array.isArray(d.copyItems)) {
+          out.copyItems = d.copyItems.filter(isObj).map(i => ({
+            id: i.id ? String(i.id) : guid(),
+            type: String(i.type == null ? 'Snippet' : i.type),
+            name: i.name == null ? undefined : String(i.name),
+            desc: i.desc == null ? undefined : String(i.desc),
+            content: i.content == null ? undefined : String(i.content)
+          }));
+        }
+
+        out.financeEntries = arr(d.financeEntries).filter(isObj).map(e => ({
+          id: e.id ? String(e.id) : guid(),
+          desc: String(e.desc == null ? '' : e.desc),
+          type: normType(e.type),
+          amount: round2(e.amount),
+          date: String(e.date == null ? '' : e.date)
+        }));
+
+        out.goals = arr(d.goals).filter(isObj).map(g => {
+          const complete = !!g.complete;
+          const progress = complete ? 100 : clampProgress(g.progress);
+          return { id: g.id ? String(g.id) : guid(), text: String(g.text == null ? '' : g.text), progress: progress,
+            complete: complete };
+        });
+
+        const pipe = isObj(d.pipeline) ? d.pipeline : {};
+        PHASES.forEach(ph => {
+          out.pipeline[ph] = arr(pipe[ph]).filter(isObj).map(t => ({
+            id: t.id ? String(t.id) : guid(),
+            text: String(t.text == null ? '' : t.text),
+            done: !!t.done
+          }));
+        });
+        // keep unknown phase keys untouched rather than dropping user data
+        Object.keys(pipe).forEach(k => { if (PHASES.indexOf(k) === -1) out.pipeline[k] = pipe[k]; });
+
+        return out;
+      }
+
+      /* Same boolean contract as before, but now REPAIRS the payload in place
+         (a single missing key no longer wipes every module). */
+      function validateData(d) {
+        const clean = sanitizeData(d);
+        if (!clean) return false;
+        Object.keys(d).forEach(k => { delete d[k]; });
+        Object.assign(d, clean);
         return true;
       }
 
       function loadData() {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          try {
-            const parsed = JSON.parse(stored);
-            appData = validateData(parsed) ? parsed : emptyData();
-          } catch (e) { appData = emptyData(); }
+        let stored = null;
+        try { stored = localStorage.getItem(STORAGE_KEY); } catch (e) { stored = null; }
+        if (!stored) return;
+
+        const keepBackup = (reason) => {
+          try { localStorage.setItem(STORAGE_KEY + '_corrupt_backup', stored); } catch (e) {}
+          console.error('CreatorForge: ' + reason + ' — a raw copy was kept under "' + STORAGE_KEY +
+            '_corrupt_backup" so nothing is destroyed.');
+        };
+
+        let parsed;
+        try {
+          parsed = JSON.parse(stored);
+        } catch (e) {
+          keepBackup('save file is not readable JSON');
+          appData = emptyData();
+          return;
         }
+
+        const clean = sanitizeData(parsed);
+        if (!clean) {
+          keepBackup('save file is not a CreatorForge data object');
+          appData = emptyData();
+          return;
+        }
+        appData = clean;
+        // persist the repaired shape so the next load is clean
+        try {
+          const normalized = JSON.stringify(appData);
+          if (normalized !== stored) localStorage.setItem(STORAGE_KEY, normalized);
+        } catch (e) {}
       }
 
       function saveData() {
@@ -520,14 +688,12 @@
       }
 
       function formatWords(n) {
-        return n.toLocaleString();
-      }
-
-      function formatMoney(v) {
-        const n = Number(v);
-        if (!isFinite(n)) return '0.00';
-        const rounded = Math.round(n * 100) / 100;
-        return rounded.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const v = toInt(n, 0);
+        const abs = Math.abs(v);
+        const sign = v < 0 ? '-' : '';
+        if (abs >= 1e6) return sign + (abs / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+        if (abs >= 1e4) return sign + (abs / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+        return v.toLocaleString(LOCALE);
       }
 
       function esc(s) {
@@ -537,24 +703,23 @@
       }
 
       function sumFinance(type) {
-        const total = appData.financeEntries
-          .filter(e => e.type === type)
-          .reduce((s, e) => {
-            const amt = Number(e.amount);
-            return s + (isFinite(amt) ? amt : 0);
-          }, 0);
-        return Math.round(total * 100) / 100;
+        const wanted = normType(type);
+        const entries = Array.isArray(appData.financeEntries) ? appData.financeEntries : [];
+        const total = entries.reduce((s, e) => {
+          if (!isObj(e) || normType(e.type) !== wanted) return s;
+          return s + toNum(e.amount);          // always number + number
+        }, 0);
+        return round2(total);                   // kill floating-point dust
       }
 
       function computeStats() {
-        const totalWords = appData.projects.reduce((sum, p) => {
-          const current = Number(p.current);
-          return sum + (isFinite(current) ? current : 0);
-        }, 0);
+        const projects = Array.isArray(appData.projects) ? appData.projects : [];
+        const goals = Array.isArray(appData.goals) ? appData.goals : [];
+        const totalWords = projects.reduce((sum, p) => sum + (isObj(p) ? Math.max(0, toInt(p.current, 0)) : 0), 0);
         const incomeTotal = sumFinance('income');
-        const completedGoals = appData.goals.filter(g => g.complete).length;
-        return { projectsCount: appData.projects.length, totalWords, income: incomeTotal, goalsDone: completedGoals,
-          totalGoals: appData.goals.length };
+        const completedGoals = goals.filter(g => isObj(g) && g.complete).length;
+        return { projectsCount: projects.length, totalWords: totalWords, income: incomeTotal,
+          goalsDone: completedGoals, totalGoals: goals.length };
       }
 
       function renderStats() {
@@ -562,7 +727,7 @@
         document.getElementById('liveStats').innerHTML = `
           <div class="stat-item"><span>Projects</span><span class="stat-value">${s.projectsCount}</span></div>
           <div class="stat-item"><span>Words</span><span class="stat-value">${formatWords(s.totalWords)}</span></div>
-          <div class="stat-item"><span>Income</span><span class="stat-value">$${formatMoney(s.income)}</span></div>
+          <div class="stat-item"><span>Income</span><span class="stat-value">${formatMoney(s.income)}</span></div>
           <div class="stat-item"><span>Goals</span><span class="stat-value">${s.goalsDone}/${s.totalGoals}</span></div>
         `;
       }
@@ -612,25 +777,25 @@
           <div class="card-grid">
             <div class="stat-card"><div class="label">Projects</div><div class="number">${s.projectsCount}</div></div>
             <div class="stat-card"><div class="label">Total Words</div><div class="number">${formatWords(s.totalWords)}</div></div>
-            <div class="stat-card"><div class="label">Income</div><div class="number">$${formatMoney(s.income)}</div></div>
+            <div class="stat-card"><div class="label">Income</div><div class="number">${formatMoney(s.income)}</div></div>
             <div class="stat-card"><div class="label">Goals</div><div class="number">${s.goalsDone}/${s.totalGoals}</div></div>
           </div>`;
       }
 
       function renderWriter() {
-        const rows = appData.projects.map(p => `<tr><td>${esc(p.title)}</td><td>${esc(p.type)}</td><td>${Number(p.current).toLocaleString()}/${Number(p.target).toLocaleString()}</td><td>${esc(p.status)}</td><td><button class="delete-project" data-id="${esc(p.id)}">Del</button></td></tr>`).join('');
+        const projects = Array.isArray(appData.projects) ? appData.projects.filter(isObj) : [];
+        const rows = projects.map(p => `<tr><td>${esc(p.title)}</td><td>${esc(p.type)}</td><td>${formatInt(p.current)}/${formatInt(p.target)}</td><td>${esc(p.status)}</td><td><button class="delete-project" data-id="${esc(p.id)}">Del</button></td></tr>`).join('');
         document.getElementById('module-writer').innerHTML = `
           <h2>✍️ Universal Writer</h2><table>${rows}</table>
           <div style="margin-top:1rem;"><input id="newTitle" placeholder="Title"><input id="newType" placeholder="Type"><input id="newCurrent" type="number" placeholder="Words"><input id="newTarget" type="number" placeholder="Target"><button id="addProject">Add</button></div>`;
         document.getElementById('addProject').onclick = () => {
           const t = document.getElementById('newTitle').value,
             ty = document.getElementById('newType').value;
-          const rawCurrent = document.getElementById('newCurrent').value.replace(/[,\s]/g, '');
-          const rawTarget = document.getElementById('newTarget').value.replace(/[,\s]/g, '');
-          const c = Number(rawCurrent);
-          const ta = Number(rawTarget);
+          const rawC = document.getElementById('newCurrent').value,
+            rawTa = document.getElementById('newTarget').value;
+          const c = toInt(rawC, NaN), ta = toInt(rawTa, NaN);
           if (!t.trim()) return;
-          if (rawCurrent === '' || rawTarget === '' || !Number.isSafeInteger(c) || c < 0 || !Number.isSafeInteger(ta) || ta <= 0) {
+          if (!isFinite(c) || c < 0 || !isFinite(ta) || ta <= 0 || c > Number.MAX_SAFE_INTEGER || ta > Number.MAX_SAFE_INTEGER) {
             alert('Invalid word counts: "Words" must be ≥ 0 and "Target" must be > 0.');
             return;
           }
@@ -690,21 +855,108 @@
         }).join('');
         document.getElementById('module-copy').innerHTML = `<h2>🧠 Copy & Framework Library</h2>${items}`;
         document.querySelectorAll('.copy-btn').forEach(b => b.onclick = (e) => {
-          const txt = e.target.dataset.text;
+          const txt = (e.target && e.target.dataset) ? e.target.dataset.text : '';
           if (!txt) return;
-          navigator.clipboard.writeText(txt).then(() => alert('Copied!'));
+          copyToClipboard(txt);
         });
       }
 
+      /* Clipboard API is unavailable or rejects on opaque / non-secure origins
+         (the product is explicitly meant to be opened offline from disk). */
+      function copyToClipboard(text) {
+        const fallback = () => {
+          let ok = false;
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            if (ta.setSelectionRange) ta.setSelectionRange(0, String(text).length);
+            ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+          } catch (err) { ok = false; }
+          alert(ok ? 'Copied!' : 'Copy failed — please select the text and copy it manually.');
+        };
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => alert('Copied!')).catch(fallback);
+          } else {
+            fallback();
+          }
+        } catch (err) { fallback(); }
+      }
+
       function renderPipeline() {
-        const phases = ['pre-prod', 'production', 'revision', 'launch', 'post-launch'];
-        const labels = ['Pre-Production', 'Production', 'Revision', 'Launch', 'Post-Launch'];
+        const phases = PHASES;
+        const labels = PHASE_LABELS;
+        const pipeline = ensurePipeline();
         let cols = phases.map((p, i) => {
-          let tasks = (appData.pipeline[p] || []).map(t =>
-            `<div class="task-card" draggable="true" data-id="${esc(t.id)}" data-phase="${esc(p)}">${t.done?'✅':''}${esc(t.text)}</div>`).join('');
-          return `<div class="pipeline-phase" data-phase="${p}"><div class="phase-title">${labels[i]}</div><div class="phase-drop-zone">${tasks}</div></div>`;
+          const list = pipeline[p];
+          let tasks = list.map((t, idx) => {
+            const first = idx === 0, last = idx === list.length - 1;
+            return `<div class="task-card${t.done ? ' done' : ''}" draggable="true" data-id="${esc(t.id)}" data-phase="${esc(p)}">` +
+              `<span class="task-text">${t.done ? '✅ ' : ''}${esc(t.text)}</span>` +
+              `<span class="task-actions">` +
+                `<button class="task-move" draggable="false" data-id="${esc(t.id)}" data-phase="${esc(p)}" data-dir="-1" title="Move to previous phase"${i === 0 ? ' disabled' : ''}>◀</button>` +
+                `<button class="task-done" draggable="false" data-id="${esc(t.id)}" data-phase="${esc(p)}" title="Toggle done">${t.done ? '↩' : '✓'}</button>` +
+                `<button class="task-move" draggable="false" data-id="${esc(t.id)}" data-phase="${esc(p)}" data-dir="1" title="Move to next phase"${i === phases.length - 1 ? ' disabled' : ''}>▶</button>` +
+                `<button class="task-del" draggable="false" data-id="${esc(t.id)}" data-phase="${esc(p)}" title="Delete task">✕</button>` +
+              `</span></div>`;
+          }).join('');
+          const count = list.length;
+          return `<div class="pipeline-phase" data-phase="${p}"><div class="phase-title">${labels[i]} (${count})</div><div class="phase-drop-zone">${tasks}</div></div>`;
         }).join('');
-        document.getElementById('module-pipeline').innerHTML = `<h2>📋 Project Pipeline</h2><div class="pipeline-board">${cols}</div>`;
+
+        const options = phases.map((p, i) => `<option value="${p}">${labels[i]}</option>`).join('');
+        document.getElementById('module-pipeline').innerHTML = `<h2>📋 Project Pipeline</h2>
+          <div class="pipeline-toolbar">
+            <input id="newTask" placeholder="New task (e.g. Record B-roll)" maxlength="200">
+            <select id="newTaskPhase">${options}</select>
+            <button id="addTask">+ Add task</button>
+          </div>
+          <div class="pipeline-board">${cols}</div>
+          <div class="pipeline-hint">Drag a card between columns, or use ◀ ▶ (works on touch screens and with a keyboard).</div>`;
+
+        const addBtn = document.getElementById('addTask');
+        if (addBtn) addBtn.onclick = () => {
+          const input = document.getElementById('newTask');
+          const text = (input.value || '').trim();
+          if (!text) return;
+          const phaseSel = document.getElementById('newTaskPhase');
+          const phase = PHASES.indexOf(phaseSel.value) === -1 ? PHASES[0] : phaseSel.value;
+          ensurePipeline()[phase].push({ id: guid(), text: text, done: false });
+          input.value = '';
+          saveData();
+          renderPipeline();
+        };
+        const taskInput = document.getElementById('newTask');
+        if (taskInput) taskInput.onkeydown = (ev) => { if (ev.key === 'Enter' && addBtn) addBtn.onclick(); };
+
+        document.querySelectorAll('.task-move').forEach(b => b.onclick = (e) => {
+          const d = e.currentTarget ? e.currentTarget.dataset : e.target.dataset;
+          moveTask(d.id, d.phase, toInt(d.dir, 0));
+        });
+        document.querySelectorAll('.task-done').forEach(b => b.onclick = (e) => {
+          const d = e.currentTarget ? e.currentTarget.dataset : e.target.dataset;
+          const list = ensurePipeline()[d.phase] || [];
+          const t = list.find(x => x.id === d.id);
+          if (!t) return;
+          t.done = !t.done;
+          saveData();
+          renderPipeline();
+        });
+        document.querySelectorAll('.task-del').forEach(b => b.onclick = (e) => {
+          const d = e.currentTarget ? e.currentTarget.dataset : e.target.dataset;
+          const pipe = ensurePipeline();
+          if (!Array.isArray(pipe[d.phase])) return;
+          pipe[d.phase] = pipe[d.phase].filter(x => x.id !== d.id);
+          saveData();
+          renderPipeline();
+        });
 
         // DRAG & DROP logic
         const taskCards = document.querySelectorAll('.task-card');
@@ -758,35 +1010,67 @@
       function handleDrop(e) {
         e.preventDefault();
         this.classList.remove('drag-over');
-        const targetPhase = this.closest('.pipeline-phase').dataset.phase;
-        const taskId = e.dataTransfer.getData('text/plain');
-        if (!taskId || !draggedItem || sourcePhase === targetPhase) return;
-        // Move task between phases
-        const taskIndex = appData.pipeline[sourcePhase].findIndex(t => t.id === taskId);
+        const host = this.closest ? this.closest('.pipeline-phase') : null;
+        const targetPhase = host && host.dataset ? host.dataset.phase : null;
+        const taskId = e.dataTransfer ? e.dataTransfer.getData('text/plain') : '';
+        if (!taskId || !draggedItem || !targetPhase || sourcePhase === targetPhase) return;
+
+        // Guard against a pipeline whose phase arrays are missing/corrupted:
+        // recreate them instead of throwing (and losing the card).
+        const pipe = ensurePipeline();
+        if (!Array.isArray(pipe[sourcePhase])) pipe[sourcePhase] = [];
+        if (!Array.isArray(pipe[targetPhase])) pipe[targetPhase] = [];
+
+        const taskIndex = pipe[sourcePhase].findIndex(t => t && t.id === taskId);
         if (taskIndex === -1) return;
-        const [task] = appData.pipeline[sourcePhase].splice(taskIndex, 1);
-        appData.pipeline[targetPhase].push(task);
+        const [task] = pipe[sourcePhase].splice(taskIndex, 1);
+        pipe[targetPhase].push(task);
         saveData();
         renderPipeline();
         draggedItem = null;
         sourcePhase = null;
       }
 
+      /* Touch / keyboard fallback for the drag & drop (HTML5 DnD is mouse-only). */
+      function moveTask(taskId, fromPhase, dir) {
+        const pipe = ensurePipeline();
+        const from = PHASES.indexOf(fromPhase);
+        if (from === -1 || !dir) return;
+        const to = Math.min(PHASES.length - 1, Math.max(0, from + (dir > 0 ? 1 : -1)));
+        if (to === from) return;
+        const list = pipe[PHASES[from]];
+        const idx = list.findIndex(t => t && t.id === taskId);
+        if (idx === -1) return;
+        const [task] = list.splice(idx, 1);
+        pipe[PHASES[to]].push(task);
+        saveData();
+        renderPipeline();
+      }
+
       function renderFinance() {
+        const entries = Array.isArray(appData.financeEntries) ? appData.financeEntries.filter(isObj) : [];
         const income = sumFinance('income');
         const expense = sumFinance('expense');
-        let rows = appData.financeEntries.map(e =>
-          `<tr><td>${esc(e.desc)}</td><td>${esc(e.type)}</td><td>$${formatMoney(e.amount)}</td><td>${esc(e.date)}</td><td><button data-id="${esc(e.id)}" class="del-fin">X</button></td></tr>`).join('');
+        const net = round2(income - expense);
+        const unknown = entries.filter(e => ['income', 'expense'].indexOf(normType(e.type)) === -1);
+        const warning = unknown.length
+          ? `<p class="fin-warning">⚠ ${unknown.length} ${unknown.length > 1 ? 'entries have' : 'entry has'} a type that is neither “income” nor “expense” — not counted in the totals above.</p>`
+          : '';
+        let rows = entries.map(e =>
+          `<tr><td>${esc(e.desc)}</td><td>${esc(e.type)}</td><td>${formatMoney(e.amount)}</td><td>${esc(e.date)}</td><td><button data-id="${esc(e.id)}" class="del-fin">X</button></td></tr>`).join('');
         document.getElementById('module-finance').innerHTML = `
-          <h2>💰 Creative Finance</h2><p>Income $${formatMoney(income)} · Expenses $${formatMoney(expense)} · Net <strong>$${formatMoney(income-expense)}</strong></p>
+          <h2>💰 Creative Finance</h2><p>Income ${formatMoney(income)} · Expenses ${formatMoney(expense)} · Net <strong>${formatMoney(net)}</strong></p>
+          ${warning}
           <table>${rows}</table>
           <input id="fDesc" placeholder="Desc"><select id="fType"><option>income</option><option>expense</option></select><input id="fAmt" type="number" placeholder="Amount"><input id="fDate" type="date"><button id="addFin">+</button>`;
         document.getElementById('addFin').onclick = () => {
-          const amt = parseFloat(document.getElementById('fAmt').value.replace(/[,\s]/g, ''));
+          const rawAmt = toNum(document.getElementById('fAmt').value, NaN);
           const desc = document.getElementById('fDesc').value.trim();
           if (!desc) return;
-          if (!isFinite(amt) || amt < 0 || amt > 1e12) { alert('Please enter a valid amount (0 to 1,000,000,000,000).'); return; }
-          appData.financeEntries.push({ id: guid(), desc: desc, type: document.getElementById('fType').value,
+          if (!isFinite(rawAmt) || rawAmt < 0 || rawAmt > 1e12) { alert('Please enter a valid amount (0 to 1,000,000,000,000).'); return; }
+          const amt = round2(rawAmt);
+          if (!Array.isArray(appData.financeEntries)) appData.financeEntries = [];
+          appData.financeEntries.push({ id: guid(), desc: desc, type: normType(document.getElementById('fType').value),
             amount: amt, date: document.getElementById('fDate').value });
           saveData();
           renderFinance();
@@ -800,23 +1084,22 @@
       }
 
       function renderGoals() {
-        let gs = appData.goals.map(g =>
-          `<div style="margin:0.5rem 0;"><span>${g.complete?'✅':''}${esc(g.text)} (${g.progress}%)</span><button data-id="${esc(g.id)}" class="toggle-goal">Toggle</button><button data-id="${esc(g.id)}" class="del-goal">Del</button></div>`).join('');
+        const goals = Array.isArray(appData.goals) ? appData.goals.filter(isObj) : [];
+        let gs = goals.map(g =>
+          `<div style="margin:0.5rem 0;"><span>${g.complete?'✅':''}${esc(g.text)} (${clampProgress(g.complete ? 100 : g.progress)}%)</span><button data-id="${esc(g.id)}" class="toggle-goal">Toggle</button><button data-id="${esc(g.id)}" class="del-goal">Del</button></div>`).join('');
         document.getElementById('module-goals').innerHTML =
           `<h2>🎯 Goals & Momentum</h2>${gs}<input id="gText" placeholder="Goal"><input id="gProg" type="number" placeholder="%"><button id="addGoal">+</button>`;
         document.getElementById('addGoal').onclick = () => {
           const txt = document.getElementById('gText').value.trim();
-          const rawProg = document.getElementById('gProg').value.trim();
           if (!txt) return;
-          if (rawProg === '') { alert('Progress must be a whole number from 0 to 100.'); return; }
-          const prog = Number(rawProg);
-          if (!Number.isInteger(prog) || prog < 0 || prog > 100) { alert('Progress must be a whole number from 0 to 100.'); return; }
+          const prog = clampProgress(document.getElementById('gProg').value);
+          if (!Array.isArray(appData.goals)) appData.goals = [];
           appData.goals.push({ id: guid(), text: txt, progress: prog, complete: prog === 100 });
           saveData();
           renderGoals();
           renderStats(); };
-        document.querySelectorAll('.toggle-goal').forEach(b => b.onclick = (e) => { const g = appData.goals.find(g => g.id ===
-            e.target.dataset.id); if (g) { g.complete = !g.complete; g.progress = g.complete ? 100 : Math.min(g.progress, 99); }
+        document.querySelectorAll('.toggle-goal').forEach(b => b.onclick = (e) => { const g = goals.find(g => g.id ===
+            e.target.dataset.id); if (g) { g.complete = !g.complete; g.progress = g.complete ? 100 : Math.min(clampProgress(g.progress), 99); }
           saveData();
           renderGoals();
           renderStats(); });
@@ -847,10 +1130,10 @@
             <p>Generated: ${new Date().toLocaleDateString()}</p>
             <ul>
               <li>Projects: ${s.projectsCount}</li>
-              <li>Total words: ${s.totalWords.toLocaleString()}</li>
-              <li>Income: $${formatMoney(income)}</li>
-              <li>Expenses: $${formatMoney(expense)}</li>
-              <li>Net: $${formatMoney(income - expense)}</li>
+              <li>Total words: ${formatInt(s.totalWords)}</li>
+              <li>Income: ${formatMoney(income)}</li>
+              <li>Expenses: ${formatMoney(expense)}</li>
+              <li>Net: ${formatMoney(round2(income - expense))}</li>
               <li>Goals completed: ${s.goalsDone}/${s.totalGoals}</li>
             </ul>`;
           printEl.style.display = 'block';
@@ -862,18 +1145,21 @@
           location.reload(); } };
       }
 
-      // Initial load
-      loadData();
-      renderStats();
-      renderCommandCenter();
-      renderWriter();
-      renderWorldStudio();
-      renderCopyLib();
-      renderPipeline();
-      renderFinance();
-      renderGoals();
-      renderExport();
-      switchModule('command');
+      // Initial load — one failing module must never blank the whole app
+      function safeRun(label, fn) {
+        try { fn(); } catch (err) { console.error('CreatorForge: "' + label + '" failed to render —', err); }
+      }
+      safeRun('loadData', loadData);
+      safeRun('stats', renderStats);
+      safeRun('Command Center', renderCommandCenter);
+      safeRun('Universal Writer', renderWriter);
+      safeRun('World & Character Studio', renderWorldStudio);
+      safeRun('Copy & Framework Library', renderCopyLib);
+      safeRun('Project Pipeline', renderPipeline);
+      safeRun('Creative Finance', renderFinance);
+      safeRun('Goals & Momentum', renderGoals);
+      safeRun('Export Center', renderExport);
+      safeRun('switchModule', () => switchModule('command'));
     })();
   </script>
 </body>
